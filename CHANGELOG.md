@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Costs: reduce CPU use when scanning older Claude transcripts for recent usage.
 - Menu bar: show the remaining quota when only the third usage window is available, including Gemini Flash Lite-only accounts, through the shared metric fallback (#4128). Thanks @devYRPauli!
 - Costs: reduce CPU use when separating Claude and Vertex AI usage in local transcripts.
 
