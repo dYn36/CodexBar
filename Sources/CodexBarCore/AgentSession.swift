@@ -193,17 +193,18 @@ struct DirectoryMetadataScanBudget {
 }
 
 enum AgentProcessPath {
+    /// Foundation's tilde rules vary by runtime/SDK. An explicit directory hint avoids a metadata probe.
+    static let expandsBareTilde = URL(fileURLWithPath: "~", isDirectory: false).relativePath != "~"
+
     static func basename(
         _ path: String,
         currentDirectory: @autoclosure () -> String = FileManager.default.currentDirectoryPath,
-        homeDirectory: @autoclosure () -> String = NSHomeDirectory()) -> String
+        expandTilde: (String) -> String = { ($0 as NSString).expandingTildeInPath },
+        expandsBareTilde: Bool = Self.expandsBareTilde) -> String
     {
+        let path = path.hasPrefix("~") && (expandsBareTilde || path.hasPrefix("~/")) ? expandTilde(path) : path
         let basename = (path as NSString).lastPathComponent
         if path.hasPrefix("/") { return basename }
-        if path.hasPrefix("~/") {
-            return path.dropFirst().allSatisfy { $0 == "/" } ? (homeDirectory() as NSString)
-                .lastPathComponent : basename
-        }
         guard basename.isEmpty || basename == "." || basename == ".." else { return basename }
         // File URLs resolve relative dot components against CWD, but leave absolute ones alone.
         var components = currentDirectory().components(separatedBy: "/")

@@ -4,7 +4,8 @@ import Testing
 
 struct AgentProcessBasenameTests {
     @Test(arguments: [
-        "", "~", "~/", "~/pi", "~/~", "~/pi/~", "~root/", "/", "//", "///", ".", "..", "./", "../",
+        "", "~", "~/", "~/pi", "~/~", "~/pi/~", "~root", "~root/", "~root/..", "/", "//", "///",
+        ".", "..", "./", "../", "~no-such-synthetic-user/..",
         "pi", "./pi", "../bin/pi", "pi/", "pi///", "/usr/local/bin/pi/", "foo/.", "foo/..",
         "a//..", "a//../..", "..//..", "/foo/.", "/foo/..", "~/.", "~/..", "~/pi/..",
         "/Applications/Claude.app/Contents/MacOS/Claude", "Application Support/Claude/claude-code/claude",
@@ -25,15 +26,42 @@ struct AgentProcessBasenameTests {
             #expect(AgentProcessPath.basename(
                 "/synthetic/process-\(index)/node/",
                 currentDirectory: directory(),
-                homeDirectory: directory()) == "node")
+                expandTilde: { _ in directory() }) == "node")
         }
         #expect(directoryReads == 0)
         #expect(AgentProcessPath.basename("", currentDirectory: directory()) == "omp")
         #expect(directoryReads == 1)
         #expect(AgentProcessPath.basename("..", currentDirectory: directory()) == "synthetic")
         #expect(directoryReads == 2)
-        #expect(AgentProcessPath.basename("~/", homeDirectory: directory()) == "omp")
+        #expect(AgentProcessPath.basename("~/", expandTilde: { _ in directory() }) == "omp")
         #expect(directoryReads == 3)
+    }
+
+    @Test
+    func `both Foundation tilde dialects preserve relative and absolute dot semantics`() {
+        let cases = [
+            ("~", "~", "home"), ("~/", "home", "home"), ("~root", "~root", "root"),
+            ("~root/", "~root", "root"), ("~root/..", "omp", ".."), ("~/pi/..", "..", ".."),
+            ("~unknown/..", "omp", "omp"), ("foo/../~", "~", "~"),
+        ]
+        for (path, modern, legacy) in cases {
+            for expandsBareTilde in [false, true] {
+                let basename = AgentProcessPath.basename(
+                    path,
+                    currentDirectory: "/work/omp",
+                    expandTilde: { path in
+                        if path == "~root" || path.hasPrefix("~root/") {
+                            return "/synthetic/root" + path.dropFirst(5)
+                        }
+                        if path == "~" || path.hasPrefix("~/") {
+                            return "/synthetic/home" + path.dropFirst()
+                        }
+                        return path
+                    },
+                    expandsBareTilde: expandsBareTilde)
+                #expect(basename == (expandsBareTilde ? legacy : modern))
+            }
+        }
     }
 
     @Test
@@ -61,7 +89,9 @@ struct AgentProcessBasenameTests {
         let start = try #require(source.range(of: "enum AgentProcessPath {"))
         let end = try #require(source.range(of: "public enum LSOFCWDOutputParser {"))
         let parser = String(source[start.lowerBound..<end.lowerBound])
-        #expect(parser.components(separatedBy: "URL(fileURLWithPath:").count - 1 == 0)
+        let hintedProbe = "URL(fileURLWithPath: \"~\", isDirectory: false)"
+        #expect(parser.components(separatedBy: hintedProbe).count - 1 == 1)
+        #expect(parser.replacingOccurrences(of: hintedProbe, with: "").contains("URL(fileURLWithPath:") == false)
         #expect(!parser.contains("fileExists"))
         #expect(!parser.contains("attributesOfItem"))
         #expect(!parser.contains("lstat("))
