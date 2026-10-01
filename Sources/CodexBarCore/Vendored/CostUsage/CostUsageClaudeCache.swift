@@ -16,17 +16,15 @@ struct CostUsageClaudeFileStamp: Equatable, Sendable, Codable {
         guard url.path.withCString({ fstatat(AT_FDCWD, $0, &info, 0) }) == 0 else { return nil }
         guard info.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG) else { return nil }
         #if os(Linux)
-        let modifiedSeconds = Int64(info.st_mtim.tv_sec)
-        let modifiedNanoseconds = Int64(info.st_mtim.tv_nsec)
+        let modifiedTime = info.st_mtim
         #else
-        let modifiedSeconds = Int64(info.st_mtimespec.tv_sec)
-        let modifiedNanoseconds = Int64(info.st_mtimespec.tv_nsec)
+        let modifiedTime = info.st_mtimespec
         #endif
         return Self(
             fileID: "\(info.st_dev):\(info.st_ino)",
             size: Int64(info.st_size),
-            modifiedSeconds: modifiedSeconds,
-            modifiedNanoseconds: modifiedNanoseconds)
+            modifiedSeconds: Int64(modifiedTime.tv_sec),
+            modifiedNanoseconds: Int64(modifiedTime.tv_nsec))
     }
 }
 
@@ -293,6 +291,7 @@ extension CostUsageScanner {
 
     static func evictPersistedClaudeReportMemoForTesting(provider: UsageProvider, cacheRoot: URL?) {
         let cacheURL = CostUsageClaudeCacheIO.cacheFileURL(provider: provider, cacheRoot: cacheRoot)
+            .standardizedFileURL.resolvingSymlinksInPath()
         try? FileManager.default.removeItem(at: CostUsageClaudeReportMemo.reportMemoFileURL(cacheFileURL: cacheURL))
     }
 }
