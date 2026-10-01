@@ -2,6 +2,8 @@
 
 ## 0.70.1 — Unreleased
 
+- Costs: reduce CPU use while bucketing local agent logs into daily usage.
+
 ## 0.70.0 — 2026-09-29
 
 ### Highlights
