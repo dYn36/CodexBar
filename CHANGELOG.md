@@ -2,6 +2,8 @@
 
 ## 0.70.1 — Unreleased
 
+- Costs: reduce CPU use while reconciling cached local Codex logs.
+
 ## 0.70.0 — 2026-09-29
 
 ### Highlights
