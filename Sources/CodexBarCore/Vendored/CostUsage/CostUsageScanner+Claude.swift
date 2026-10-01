@@ -186,8 +186,10 @@ extension CostUsageScanner {
                     guard !line.wasTruncated else { return }
                     guard line.bytes.containsAscii(#""type":"assistant""#) else { return }
                     guard line.bytes.containsAscii(#""usage""#) else { return }
-                    let couldBeVertex = providerFilter != .all && Self.couldContainVertexAIUsage(line.bytes)
-                    if providerFilter == .vertexAIOnly, !couldBeVertex { return }
+                    let couldContainMetadata = providerFilter != .all && Self.couldContainVertexAIMetadata(line.bytes)
+                    if providerFilter == .vertexAIOnly, !couldContainMetadata,
+                       !line.bytes.containsAscii("@"), !line.bytes.containsAscii("_vrtx_")
+                    { return }
 
                     autoreleasepool {
                         #if DEBUG
@@ -199,9 +201,11 @@ extension CostUsageScanner {
                             type == "assistant"
                         else { return }
                         let message = obj.dictionary("message")
-                        if couldBeVertex,
-                           Self.isVertexAIUsageEntry(obj: obj, message: message) != (providerFilter == .vertexAIOnly)
-                        { return }
+                        if providerFilter != .all {
+                            let isVertex = Self.isVertexAIUsageEntry(
+                                obj: obj, message: message, scanMetadata: couldContainMetadata)
+                            if isVertex != (providerFilter == .vertexAIOnly) { return }
+                        }
 
                         guard let tsText = obj["timestamp"] as? String,
                               let parsedTimestamp = Self.claudeTimestampAndDayKey(tsText, calendar: range.calendar)
@@ -449,17 +453,17 @@ extension CostUsageScanner {
         "client",
     ]
 
-    private static let vertexRawMarkers: [StaticString] = [
-        "vertex", "Vertex", "gcp", "Gcp", "_vrtx_", "@", #"\u004"#, #"\u005"#, #"\u006"#, #"\u007"#,
+    private static let vertexMetadataRawMarkers: [StaticString] = [
+        "vertex", "Vertex", "gcp", "Gcp", #"\u004"#, #"\u005"#, #"\u006"#, #"\u007"#,
     ]
 
-    private static func couldContainVertexAIUsage(_ line: Data) -> Bool {
+    private static func couldContainVertexAIMetadata(_ line: Data) -> Bool {
         line.withUnsafeBytes { (bytes: UnsafeRawBufferPointer) in
             guard let base = bytes.baseAddress else { return false }
             // Foundation's lowercase/canonical substring matching cannot create these ASCII markers
             // from non-ASCII. Combining scalars can prevent matches; the decoded classifier decides positives.
             // Escape prefixes cover ASCII letters, @, and underscores regardless of the final hex digit's case.
-            return self.vertexRawMarkers.contains { marker in
+            return self.vertexMetadataRawMarkers.contains { marker in
                 marker.withUTF8Buffer { needle in
                     var offset = 0
                     while offset <= bytes.count - needle.count {
@@ -487,7 +491,11 @@ extension CostUsageScanner {
         self.isVertexAIUsageEntry(obj: obj, message: obj.dictionary("message"))
     }
 
-    private static func isVertexAIUsageEntry(obj: ClaudeJSONObject, message: ClaudeJSONObject?) -> Bool {
+    private static func isVertexAIUsageEntry(
+        obj: ClaudeJSONObject,
+        message: ClaudeJSONObject?,
+        scanMetadata: Bool = true) -> Bool
+    {
         // Primary detection: Vertex AI message IDs and request IDs have "vrtx" prefix
         // e.g., "msg_vrtx_0154LUXjFVzQGUca3yK2RUeo", "req_vrtx_011CWjK86SWeFuXqZKUtgB1H"
         if let messageId = message?["id"] as? String,
@@ -504,23 +512,13 @@ extension CostUsageScanner {
         // Secondary detection: model name with @ version separator (Vertex AI format)
         // e.g., "claude-opus-4-5@20251101" vs "claude-opus-4-5-20251101"
         if let model = message?["model"] as? String,
-           Self.modelNameLooksVertex(model)
+           model.hasPrefix("claude-"), model.contains("@")
         {
             return true
         }
 
         // The recursive walk already includes root and message metadata, requests, context, and client.
-        return Self.containsVertexAIMetadata(in: obj)
-    }
-
-    /// Detects Vertex AI model names by format.
-    /// Vertex AI uses @ for version separator: claude-opus-4-5@20251101
-    /// Anthropic API uses -: claude-opus-4-5-20251101
-    private static func modelNameLooksVertex(_ model: String) -> Bool {
-        // Vertex AI model format: claude-{variant}@{version}
-        // Examples: claude-opus-4-5@20251101, claude-sonnet-4-5@20250514
-        guard model.hasPrefix("claude-") else { return false }
-        return model.contains("@")
+        return scanMetadata && Self.containsVertexAIMetadata(in: obj)
     }
 
     private static func containsVertexAIMetadata(in dict: ClaudeJSONObject) -> Bool {

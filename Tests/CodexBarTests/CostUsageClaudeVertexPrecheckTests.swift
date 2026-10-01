@@ -8,6 +8,11 @@ struct CostUsageClaudeVertexPrecheckTests {
         + #""content":[{"type":"tool_use","input":{"text":"synthetic payload"}}],"#
         + #""usage":{"input_tokens":10,"output_tokens":2}}}"#
 
+    private static let nonVertexContent = [
+        "@MainActor func render() {}", "import @scope/package", "fixture@example.test",
+        "@decorator", "msg_vrtx_unrelated",
+    ]
+
     @Test
     func `raw escaped and Unicode markers preserve full walk filter results`() throws {
         let env = try CostUsageTestEnvironment()
@@ -15,6 +20,9 @@ struct CostUsageClaudeVertexPrecheckTests {
         let day = try env.makeLocalNoon(year: 2026, month: 9, day: 29)
         let range = CostUsageScanner.CostUsageDayRange(since: day, until: day, calendar: .current)
         var lines = [Self.plain]
+        for content in Self.nonVertexContent + [#"\u0040MainActor"#, #"msg_\u0076rtx_unrelated"#] {
+            lines.append(Self.plain.replacingOccurrences(of: "synthetic payload", with: content))
+        }
         for metadata in [
             #"{"provider":"Vertex"}"#, #"{"provider":"GCP"}"#, #"{"gcp_project":false}"#,
             #"{"myVeRtExFlag":null}"#, #"{"nested":[{"backend":"VERTEX"}]}"#,
@@ -73,6 +81,33 @@ struct CostUsageClaudeVertexPrecheckTests {
                     modelsDevCatalog: ModelsDevCatalog(providers: [:]))
                 #expect(actual.rows == (keep ? all.rows : []), "fixture \(index), filter \(filter)")
                 #expect(actual.parsedBytes == all.parsedBytes)
+            }
+        }
+    }
+
+    @Test
+    func `content only id and model markers never require metadata walks`() throws {
+        let env = try CostUsageTestEnvironment()
+        defer { env.cleanup() }
+        let day = try env.makeLocalNoon(year: 2026, month: 9, day: 29)
+        let range = CostUsageScanner.CostUsageDayRange(since: day, until: day, calendar: .current)
+        for content in Self.nonVertexContent {
+            let line = Self.plain.replacingOccurrences(of: "synthetic payload", with: content)
+            let file = try env.writeClaudeProjectFile(
+                relativePath: "content/session.jsonl", contents: String(repeating: line + "\n", count: 100))
+            for filter in [CostUsageScanner.ClaudeLogProviderFilter.all, .excludeVertexAI, .vertexAIOnly] {
+                let work = CostUsageScanner.ClaudeScanWorkRecorder()
+                let parsed = CostUsageScanner.withClaudeScanWorkRecorderForTesting(work) {
+                    CostUsageScanner.parseClaudeFile(
+                        fileURL: file,
+                        range: range,
+                        providerFilter: filter,
+                        modelsDevCatalog: ModelsDevCatalog(providers: [:]))
+                }
+                #expect(parsed.rows.count == (filter == .vertexAIOnly ? 0 : 100))
+                #expect(parsed.parsedBytes == Int64((line.utf8.count + 1) * 100))
+                #expect(work.snapshot().claudeLineDecodes == 100)
+                #expect(work.snapshot().vertexMetadataWalks == 0, "\(content), \(filter)")
             }
         }
     }
