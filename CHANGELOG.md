@@ -5,6 +5,7 @@
 ### Fixed
 
 - Menu bar: show the remaining quota when only the third usage window is available, including Gemini Flash Lite-only accounts, through the shared metric fallback (#4128). Thanks @devYRPauli!
+- Codex: reduce CPU use when loading conversation titles for large local cost histories.
 
 ## 0.70.0 — 2026-09-29
 
