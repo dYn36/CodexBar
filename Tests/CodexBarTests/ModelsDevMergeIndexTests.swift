@@ -100,6 +100,15 @@ struct ModelsDevMergeIndexTests {
         }
     }
 
+    @Test(arguments: [false, true])
+    func `normalized lookup preserves catalog Unicode spelling`(exact: Bool) throws {
+        let provider = Self.provider(["opaque": Self.model("synthetic-e\u{301}")])
+        let query = "synthetic-é"
+        let actual = try #require(provider.pricing(modelID: query, exactModelID: exact))
+        let expected = try #require(Self.legacyPricing(provider, modelID: query, exact: exact))
+        #expect(Array(actual.normalizedModelID.utf8) == Array(expected.normalizedModelID.utf8))
+    }
+
     @Test
     func `compiled regexes preserve legacy candidates and stable identities`() {
         let bases = [

@@ -207,10 +207,13 @@ struct ModelsDevProvider: Codable, Equatable {
                     if normalizedModels?[normalizedID] == nil { normalizedModels?[normalizedID] = model }
                 }
             }
-            if let pricing = normalizedModels?[candidate]?.pricing(
-                providerID: self.id ?? self.mapKey ?? "", providerName: self.name)
+            if let normalizedModels,
+               let index = normalizedModels.index(forKey: candidate),
+               let pricing = normalizedModels[index].value.pricing(
+                   providerID: self.id ?? self.mapKey ?? "", providerName: self.name)
             {
-                return ModelsDevPricingLookup(pricing: pricing, normalizedModelID: candidate)
+                // Preserve the catalog's spelling when Unicode-equivalent query strings differ in bytes.
+                return ModelsDevPricingLookup(pricing: pricing, normalizedModelID: normalizedModels[index].key)
             }
         }
 
