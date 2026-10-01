@@ -7,6 +7,7 @@
 - Docs: link the community codexbar-kde Plasma widget for Linux usage meters and agent-session views (#4117). Thanks @materemias!
 ### Fixed
 
+- Reduce CPU use when saving unchanged local Claude and Vertex cost history.
 - Menu bar: show the remaining quota when only the third usage window is available, including Gemini Flash Lite-only accounts, through the shared metric fallback (#4128). Thanks @devYRPauli!
 
 ## 0.70.0 — 2026-09-29
