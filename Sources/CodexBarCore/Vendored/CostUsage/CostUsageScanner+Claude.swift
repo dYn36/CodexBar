@@ -1,4 +1,11 @@
 import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 
 extension CostUsageScanner {
     static func loadDailyReportCancellable(
@@ -179,16 +186,22 @@ extension CostUsageScanner {
                     guard !line.wasTruncated else { return }
                     guard line.bytes.containsAscii(#""type":"assistant""#) else { return }
                     guard line.bytes.containsAscii(#""usage""#) else { return }
+                    let couldBeVertex = providerFilter != .all && Self.couldContainVertexAIUsage(line.bytes)
+                    if providerFilter == .vertexAIOnly, !couldBeVertex { return }
 
                     autoreleasepool {
+                        #if DEBUG
+                        recordClaudeScanWork(.claudeLineDecode)
+                        #endif
                         guard
                             let obj = try? ClaudeJSONObject.decode(line.bytes),
                             let type = obj["type"] as? String,
                             type == "assistant"
                         else { return }
                         let message = obj.dictionary("message")
-                        guard Self.matchesClaudeProviderFilter(obj: obj, message: message, filter: providerFilter)
-                        else { return }
+                        if couldBeVertex,
+                           Self.isVertexAIUsageEntry(obj: obj, message: message) != (providerFilter == .vertexAIOnly)
+                        { return }
 
                         guard let tsText = obj["timestamp"] as? String,
                               let parsedTimestamp = Self.claudeTimestampAndDayKey(tsText, calendar: range.calendar)
@@ -436,18 +449,32 @@ extension CostUsageScanner {
         "client",
     ]
 
-    private static func matchesClaudeProviderFilter(
-        obj: ClaudeJSONObject,
-        message: ClaudeJSONObject?,
-        filter: ClaudeLogProviderFilter) -> Bool
-    {
-        switch filter {
-        case .all:
-            true
-        case .vertexAIOnly:
-            self.isVertexAIUsageEntry(obj: obj, message: message)
-        case .excludeVertexAI:
-            !self.isVertexAIUsageEntry(obj: obj, message: message)
+    private static let vertexRawMarkers: [StaticString] = [
+        "vertex", "Vertex", "gcp", "Gcp", "_vrtx_", "@", #"\u004"#, #"\u005"#, #"\u006"#, #"\u007"#,
+    ]
+
+    private static func couldContainVertexAIUsage(_ line: Data) -> Bool {
+        line.withUnsafeBytes { (bytes: UnsafeRawBufferPointer) in
+            guard let base = bytes.baseAddress else { return false }
+            // Foundation's lowercase/canonical substring matching cannot create these ASCII markers
+            // from non-ASCII. Combining scalars can prevent matches; the decoded classifier decides positives.
+            // Escape prefixes cover ASCII letters, @, and underscores regardless of the final hex digit's case.
+            return self.vertexRawMarkers.contains { marker in
+                marker.withUTF8Buffer { needle in
+                    var offset = 0
+                    while offset <= bytes.count - needle.count {
+                        // Skip payload bytes in libc; inspect only candidate starts in Swift.
+                        guard let found = memchr(base + offset, Int32(needle[0]), bytes.count - offset)
+                        else { return false }
+                        offset = base.distance(to: found)
+                        if needle.count <= bytes.count - offset,
+                           needle.indices.allSatisfy({ bytes[offset + $0] | 0x20 == needle[$0] | 0x20 })
+                        { return true }
+                        offset += 1
+                    }
+                    return false
+                }
+            }
         }
     }
 
@@ -497,7 +524,10 @@ extension CostUsageScanner {
     }
 
     private static func containsVertexAIMetadata(in dict: ClaudeJSONObject) -> Bool {
-        dict.contains { key, value in
+        #if DEBUG
+        recordClaudeScanWork(.vertexMetadataWalk)
+        #endif
+        return dict.contains { key, value in
             if self.containsClaudeVertexMarker(key, includeGCP: true) {
                 return true
             }
