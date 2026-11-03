@@ -1,0 +1,319 @@
+{
+  "environment": {
+    "runner": "GitHub-hosted xcode-27-arm64",
+    "runnerImageVersion": "20261026.0314.1",
+    "macOS": "27.0.1",
+    "macOSBuild": "26A434",
+    "xcode": "27.0",
+    "xcodeBuild": "27A266a",
+    "swift": "6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)",
+    "architecture": "arm64",
+    "language": "de",
+    "locale": "de_DE",
+    "signing": "normal package_app.sh adhoc debug",
+    "allowLLDB": false
+  },
+  "proofKind": "real-packaged-app-profile-labels",
+  "run_url": "https://github.com/dYn36/CodexBar/actions/runs/41681141363",
+  "run_id": 41681141363,
+  "job_id": 126074790060,
+  "workflow_commit": "eb0bb695c8166245c022125c13137537efd41541",
+  "source_head": "ac8e6a93d083f46b52984052317f425309d20894",
+  "source_base": "897bff31731bb4b21b105f6e8bf4c32a8a8bf095",
+  "scope": "Fresh GitHub-hosted macOS VM; exact normal packaged apps with synthetic browser Local State and placeholder Cookies/Network/Cookies files. No injected picker lists, browser launches, cookie records, authentication or live account usage.",
+  "actualApp": {
+    "actualAppProofPassed": true,
+    "cleanup_errors": [],
+    "diagnostic_errors": [],
+    "new_nonempty_parents_preserved": [],
+    "own_producers_absent_before_external_cleanup": true,
+    "real_app_byhost_absent": true,
+    "real_app_domains_absent": {
+      "Y5PE65HELJ.com.steipete.codexbar.debug": true,
+      "com.steipete.codexbar.debug": true,
+      "group.com.steipete.codexbar.debug": true
+    },
+    "real_app_external_cleanup_verified": true,
+    "real_app_paths_absent": true,
+    "source_and_binary_provenance": [
+      {
+        "binarySHA256": "d33ddc02339459028a0f524c20a4429288f8caa12349cbd1009c360bf5fb7c54",
+        "codeDirectoryHash": "36ccb69bbe160a476e01d82fbea39eaa65e04ca6",
+        "getTaskAllow": false,
+        "packageSourceClean": true,
+        "sourceCommit": "ac8e6a93d083f46b52984052317f425309d20894",
+        "variant": "head"
+      },
+      {
+        "binarySHA256": "044753c1e57f87347461df1b0d200122fefafba7e4217afb7bfec1563de4075d",
+        "codeDirectoryHash": "883ab834cd11e680ea4194ecb8c47b360965b2b8",
+        "getTaskAllow": false,
+        "packageSourceClean": true,
+        "sourceCommit": "897bff31731bb4b21b105f6e8bf4c32a8a8bf095",
+        "variant": "base"
+      }
+    ],
+    "stages": [
+      {
+        "allProvidersDisabled": true,
+        "browser": "edge",
+        "nativeAttachmentBound": true,
+        "phase": "initial",
+        "selectedRawIDUnchanged": true,
+        "stage": "head-edge-initial",
+        "ui": {
+          "browser": "edge",
+          "desiredName": "Proof Edge",
+          "desiredVisible": true,
+          "desiredVisibleAfterRestart": true,
+          "fallbackVisible": false,
+          "fallbackVisibleAfterRestart": false,
+          "germanPane": true,
+          "newProcessAfterRestart": true,
+          "passed": true,
+          "phase": "initial",
+          "pngBytes": 94039,
+          "pngSHA256": "ab3c2a56ac4692806b9cc2e72420b0ce6e954f3efd57689e698d9f64ccc30d2d",
+          "popupControls": [
+            {
+              "label": "",
+              "value": "Microsoft Edge"
+            },
+            {
+              "label": "",
+              "value": "Proof Edge"
+            }
+          ],
+          "sameExactBundle": true,
+          "variant": "head"
+        },
+        "variant": "head",
+        "xcodebuild_exit": 0
+      },
+      {
+        "allProvidersDisabled": true,
+        "browser": "edge",
+        "nativeAttachmentBound": true,
+        "phase": "renamed-default",
+        "selectedRawIDUnchanged": true,
+        "stage": "head-edge-renamed-default",
+        "ui": {
+          "browser": "edge",
+          "desiredName": "Default",
+          "desiredVisible": true,
+          "desiredVisibleAfterRestart": true,
+          "fallbackVisible": false,
+          "fallbackVisibleAfterRestart": false,
+          "germanPane": true,
+          "newProcessAfterRestart": true,
+          "passed": true,
+          "phase": "renamed-default",
+          "pngBytes": 95400,
+          "pngSHA256": "6e302711d0424fc80e9c046fdc72a53b0b1a4fc7bca803791c462ee66da06083",
+          "popupControls": [
+            {
+              "label": "",
+              "value": "Microsoft Edge"
+            },
+            {
+              "label": "",
+              "value": "Default"
+            }
+          ],
+          "sameExactBundle": true,
+          "variant": "head"
+        },
+        "variant": "head",
+        "xcodebuild_exit": 0
+      },
+      {
+        "allProvidersDisabled": true,
+        "browser": "chrome",
+        "nativeAttachmentBound": true,
+        "phase": "initial",
+        "selectedRawIDUnchanged": true,
+        "stage": "head-chrome-initial",
+        "ui": {
+          "browser": "chrome",
+          "desiredName": "Proof Chrome",
+          "desiredVisible": true,
+          "desiredVisibleAfterRestart": true,
+          "fallbackVisible": false,
+          "fallbackVisibleAfterRestart": false,
+          "germanPane": true,
+          "newProcessAfterRestart": true,
+          "passed": true,
+          "phase": "initial",
+          "pngBytes": 94634,
+          "pngSHA256": "056988902b7ccd6b7450f01753fe1ff9c26800cae18a82c5c97d9e09df052e9c",
+          "popupControls": [
+            {
+              "label": "",
+              "value": "Chrome"
+            },
+            {
+              "label": "",
+              "value": "Proof Chrome"
+            }
+          ],
+          "sameExactBundle": true,
+          "variant": "head"
+        },
+        "variant": "head",
+        "xcodebuild_exit": 0
+      },
+      {
+        "allProvidersDisabled": true,
+        "browser": "chrome",
+        "nativeAttachmentBound": true,
+        "phase": "renamed-default",
+        "selectedRawIDUnchanged": true,
+        "stage": "head-chrome-renamed-default",
+        "ui": {
+          "browser": "chrome",
+          "desiredName": "Default",
+          "desiredVisible": true,
+          "desiredVisibleAfterRestart": true,
+          "fallbackVisible": false,
+          "fallbackVisibleAfterRestart": false,
+          "germanPane": true,
+          "newProcessAfterRestart": true,
+          "passed": true,
+          "phase": "renamed-default",
+          "pngBytes": 94217,
+          "pngSHA256": "f86b9496ef39fe98cd485c23f2e53b10cb929403d950fe82337b597b075eae3d",
+          "popupControls": [
+            {
+              "label": "",
+              "value": "Chrome"
+            },
+            {
+              "label": "",
+              "value": "Default"
+            }
+          ],
+          "sameExactBundle": true,
+          "variant": "head"
+        },
+        "variant": "head",
+        "xcodebuild_exit": 0
+      },
+      {
+        "allProvidersDisabled": true,
+        "browser": "edge",
+        "nativeAttachmentBound": true,
+        "phase": "initial",
+        "selectedRawIDUnchanged": true,
+        "stage": "base-edge-initial",
+        "ui": {
+          "browser": "edge",
+          "desiredName": "Proof Edge",
+          "desiredVisible": false,
+          "desiredVisibleAfterRestart": false,
+          "fallbackVisible": true,
+          "fallbackVisibleAfterRestart": true,
+          "germanPane": true,
+          "newProcessAfterRestart": true,
+          "passed": true,
+          "phase": "initial",
+          "pngBytes": 95602,
+          "pngSHA256": "10a5bc41b4f053fa5cf4e5746be3d17e6d145be9609030753b8cc1e2229cf508",
+          "popupControls": [
+            {
+              "label": "",
+              "value": "Microsoft Edge"
+            },
+            {
+              "label": "",
+              "value": "Standard"
+            }
+          ],
+          "sameExactBundle": true,
+          "variant": "base"
+        },
+        "variant": "base",
+        "xcodebuild_exit": 0
+      },
+      {
+        "allProvidersDisabled": true,
+        "browser": "chrome",
+        "nativeAttachmentBound": true,
+        "phase": "initial",
+        "selectedRawIDUnchanged": true,
+        "stage": "base-chrome-initial",
+        "ui": {
+          "browser": "chrome",
+          "desiredName": "Proof Chrome",
+          "desiredVisible": false,
+          "desiredVisibleAfterRestart": false,
+          "fallbackVisible": true,
+          "fallbackVisibleAfterRestart": true,
+          "germanPane": true,
+          "newProcessAfterRestart": true,
+          "passed": true,
+          "phase": "initial",
+          "pngBytes": 94533,
+          "pngSHA256": "3dd00154befb475f12bd609a38dda55ca6899f39bcc70d8ab9addb903824e627",
+          "popupControls": [
+            {
+              "label": "",
+              "value": "Chrome"
+            },
+            {
+              "label": "",
+              "value": "Standard"
+            }
+          ],
+          "sameExactBundle": true,
+          "variant": "base"
+        },
+        "variant": "base",
+        "xcodebuild_exit": 0
+      }
+    ],
+    "visual_review": "completed; see visualReview"
+  },
+  "rootCleanup": {
+    "verified": true,
+    "rootAbsent": true,
+    "ownProcessesAbsent": true,
+    "originallyAbsentPathsRestored": true,
+    "logicalPreferenceDomains": {
+      "org.codexbar.proof4911.fixture.r41681141363a1": "absent",
+      "org.codexbar.proof4911.uitests.r41681141363a1": "absent",
+      "org.codexbar.proof4911.uitests.r41681141363a1.xctrunner": "absent"
+    },
+    "byhostPathsAbsent": {
+      "org.codexbar.proof4911.fixture.r41681141363a1": true,
+      "org.codexbar.proof4911.uitests.r41681141363a1": true,
+      "org.codexbar.proof4911.uitests.r41681141363a1.xctrunner": true
+    },
+    "cleanupErrors": []
+  },
+  "visualReview": {
+    "method": "Assistant visually inspected each original native PNG after verifying byte length and SHA256",
+    "passed": true,
+    "observations": {
+      "head-edge-initial": "Browser Microsoft Edge; Browserprofil Proof Edge",
+      "head-edge-renamed-default": "Browser Microsoft Edge; Browserprofil Default; German surrounding labels",
+      "head-chrome-initial": "Browser Chrome; Browserprofil Proof Chrome",
+      "head-chrome-renamed-default": "Browser Chrome; Browserprofil Default; German surrounding labels",
+      "base-edge-initial": "Browser Microsoft Edge; Browserprofil Standard",
+      "base-chrome-initial": "Browser Chrome; Browserprofil Standard"
+    }
+  },
+  "limitations": [
+    "Local State and cookie filenames are synthetic, with no real browsers or accounts.",
+    "Config seeds the selected canonical profile ID; this verifies display and persistence of that normal saved configuration, not a UI selection click.",
+    "Local State rename occurs while the app is stopped, between stages; an in-place rename while a picker is open is not tested.",
+    "The UI test asserts both launches; only the first launch of each stage has a PNG. A new PID, expected visible value and unchanged parent-checked raw ID establish each restart.",
+    "Baseline tests intentionally assert the observed defect (Standard), so XCTest exits zero while desiredVisible is false.",
+    "No OCR success is claimed; unchanged native images were inspected visually.",
+    "The Default image alone cannot distinguish metadata resolution from a directory-name fallback. Initial saved-name images and the separate source-level rename regression supply the complementary metadata evidence.",
+    "The condensed JSON publishes comparison booleans rather than individual raw profile IDs or process IDs; the archived executed workflow contains the actual assertions."
+  ],
+  "independentReview": {
+    "result": "No contradictory findings; combined evidence satisfies the stated discovery, rename/restart and literal-name criteria for this label patch.",
+    "checks": "All six original native PNGs inspected and SHA256/byte lengths compared with result JSON; code/controller assertions and scope reviewed."
+  }
+}

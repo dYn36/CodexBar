@@ -1,0 +1,990 @@
+name: Langdock real packaged-app profile proof
+"on":
+  push:
+    branches: [codex/browser-profile-display-names]
+    paths: [.github/workflows/langdock-profile-ui-proof.yml]
+permissions: {}
+concurrency:
+  group: langdock-pr4911-ui-proof
+  cancel-in-progress: false
+jobs:
+  actual-app:
+    runs-on: xcode-27
+    timeout-minutes: 65
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
+    steps:
+      - name: Verify hosted runner and Xcode
+        env:
+          PROOF_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        run: |
+          test "$PROOF_RUNNER_ENVIRONMENT" = github-hosted
+          test -d "$DEVELOPER_DIR"
+          xcodebuild -version
+          xcrun swift --version
+      - name: Prepare ordinary isolated VM app state
+        env:
+          PROOF_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        run: |
+          python3 - <<'PY'
+          def remote_prepare():
+              from pathlib import Path
+              import hashlib
+              import json
+              import os
+              import subprocess
+              import atexit
+              import shutil
+              import signal
+              import re
+              import xml.sax.saxutils
+
+              run = os.environ["GITHUB_RUN_ID"]
+              attempt = os.environ["GITHUB_RUN_ATTEMPT"]
+              assert os.environ["PROOF_RUNNER_ENVIRONMENT"] == "github-hosted"
+              assert run.isdigit() and attempt.isdigit()
+              root = Path(os.environ["RUNNER_TEMP"]) / ("pr4911-ui-" + run + "-" + attempt)
+              assert not root.exists(), "Do not reuse an existing proof directory"
+              suffix = "r" + run + "a" + attempt
+              app_id = "org.codexbar.proof4911.fixture." + suffix
+              test_id = "org.codexbar.proof4911.uitests." + suffix
+              domains = [app_id, test_id, test_id + ".xctrunner"]
+              def domain_exists(domain):
+                  result = subprocess.run(["/usr/bin/defaults", "read", domain], capture_output=True, text=True)
+                  if result.returncode == 0:
+                      return True
+                  missing = re.search(r"Domain\s+" + re.escape(domain) + r"\s+does not exist\b",
+                                      result.stdout + result.stderr, re.IGNORECASE)
+                  confirmed_not_found = result.stderr.strip() == "Error: Domain '" + domain + "' not found."
+                  if result.returncode == 1 and (missing or confirmed_not_found):
+                      return False
+                  raise RuntimeError("Preference namespace state is unknown: " + domain
+                                     + "; exit=" + str(result.returncode)
+                                     + "; stderr=" + repr(result.stderr.strip()[:500]))
+              before = {d: domain_exists(d) for d in domains}
+              assert not any(before.values()), "Preserve preexisting preference namespaces"
+              paths_before = {}
+              for domain in domains:
+                  for area, leaf in [
+                      ("Preferences", domain + ".plist"), ("Saved Application State", domain + ".savedState"),
+                      ("Caches", domain), ("HTTPStorages", domain), ("WebKit", domain),
+                      ("Application Support", domain), ("Containers", domain),
+                  ]:
+                      path = Path.home() / "Library" / area / leaf
+                      paths_before[str(path)] = os.path.lexists(path)
+                  assert not list((Path.home() / "Library/Preferences/ByHost").glob(domain + ".*.plist"))
+              assert not any(paths_before.values()), "Preserve existing proof-named files"
+              created = [False]
+              completed = [False]
+              def rollback_incomplete_preparation():
+                  if created[0] and not completed[0] and root.exists():
+                      shutil.rmtree(root)
+              atexit.register(rollback_incomplete_preparation)
+              def interrupted(signum, frame):
+                  raise SystemExit(128 + signum)
+              signal.signal(signal.SIGTERM, interrupted)
+              root.mkdir(mode=0o700)
+              created[0] = True
+              (root / ".owned-by-pr4911").write_text(run + ":" + attempt)
+              plan = {"root": str(root), "domains_existed_before": before, "paths_existed_before": paths_before,
+                      "app_id": app_id, "test_id": test_id,
+                      "rules": "No TCC, authorizationdb, security, sudo, credentials, browser or user data operations."}
+              (root / "plan.json").write_text(json.dumps(plan, indent=2))
+              with open(os.environ["GITHUB_ENV"], "a") as env:
+                  env.write("PROOF_ROOT=" + str(root) + "\n")
+              observations = root / "observations"
+              observations.mkdir()
+              (root / "Fixture.swift").write_text(r'''
+          import Foundation
+          import SwiftUI
+
+          @main struct ProofFixture: App {
+              init() {
+                  if let output = ProcessInfo.processInfo.environment["PROOF_OUTPUT"] {
+                      let environment = ProcessInfo.processInfo.environment
+                      let keys = ["XCTestConfigurationFilePath", "XCTestBundlePath", "XCTestSessionIdentifier",
+                                  "TESTING_LIBRARY_VERSION", "SWIFT_TESTING", "SWIFT_TESTING_ENABLED"]
+                      let markers = Dictionary(uniqueKeysWithValues: keys.map { ($0, environment[$0] != nil) })
+                      if let data = try? JSONSerialization.data(withJSONObject: markers, options: [.sortedKeys]) {
+                          try? data.write(to: URL(fileURLWithPath: output).appendingPathComponent("app-test-markers.json"))
+                      }
+                  }
+              }
+              var body: some Scene {
+                  WindowGroup {
+                      Text("PR4911 preflight main")
+                          .font(.system(size: 28)).padding(50).frame(width: 640, height: 260)
+                          .preferredColorScheme(.light)
+                  }
+                  Settings {
+                      Text("PR4911 preflight settings")
+                          .font(.system(size: 28)).padding(50).frame(width: 640, height: 260)
+                          .preferredColorScheme(.light)
+                  }
+              }
+          }
+          ''')
+              (root / "UITests.swift").write_text(r'''
+          import Foundation
+          import XCTest
+          import XCUIAutomation
+          import CryptoKit
+
+          final class PreflightTests: XCTestCase {
+              @MainActor
+              func testPreferencesShortcutAndScreenshot() throws {
+                  self.executionTimeAllowance = 90
+                  let output = try XCTUnwrap(ProcessInfo.processInfo.environment["PROOF_OUTPUT"])
+                  let app = XCUIApplication()
+                  app.launchEnvironment["PROOF_OUTPUT"] = output
+                  app.launch()
+                  defer { app.terminate() }
+                  let main = app.staticTexts["PR4911 preflight main"].waitForExistence(timeout: 20)
+                  XCTAssertTrue(main, "The own fixture main window must exist")
+                  guard main else { return }
+                  app.typeKey(",", modifierFlags: .command)
+                  let settings = app.staticTexts["PR4911 preflight settings"].waitForExistence(timeout: 20)
+                  XCTAssertTrue(settings, "Cmd+, must open the own settings window")
+                  guard settings else { return }
+                  let window = app.windows.containing(.staticText, identifier: "PR4911 preflight settings").firstMatch
+                  XCTAssertTrue(window.waitForExistence(timeout: 10))
+                  let screenshot = window.screenshot()
+                  let png = screenshot.pngRepresentation
+                  XCTAssertGreaterThan(png.count, 4096)
+                  let imageAttachment = XCTAttachment(data: png, uniformTypeIdentifier: "public.png")
+                  imageAttachment.name = "PR4911 preflight settings"
+                  imageAttachment.lifetime = .keepAlways
+                  self.add(imageAttachment)
+                  let captured = png.count > 4096
+                  let result: [String: Any] = [
+                      "mainWindow": main, "settingsShortcut": settings, "screenshotCaptured": captured,
+                      "pngBytes": png.count, "pngSHA256": SHA256.hash(data: png).map { String(format: "%02x", $0) }.joined(), "passed": main && settings && captured,
+                  ]
+                  let data = try JSONSerialization.data(withJSONObject: result, options: [.sortedKeys])
+                  let metadataAttachment = XCTAttachment(data: data, uniformTypeIdentifier: "public.json")
+                  metadataAttachment.name = "PR4911 preflight result"
+                  metadataAttachment.lifetime = .keepAlways
+                  self.add(metadataAttachment)
+                  print("PR4911_UI_PREFLIGHT_OBSERVATIONS \(String(decoding: try JSONSerialization.data(withJSONObject: result, options: [.sortedKeys]), as: UTF8.self))")
+              }
+          }
+          ''')
+              objects = {}
+              def oid(label):
+                  return hashlib.sha1(label.encode()).hexdigest()[:24].upper()
+              def obj(label, isa, **fields):
+                  key = oid(label)
+                  assert key not in objects
+                  objects[key] = {"isa": isa, **fields}
+                  return key
+              app_file = obj("app-file", "PBXFileReference", lastKnownFileType="sourcecode.swift",
+                             path="Fixture.swift", sourceTree="<group>")
+              tests_file = obj("tests-file", "PBXFileReference", lastKnownFileType="sourcecode.swift",
+                               path="UITests.swift", sourceTree="<group>")
+              app_product = obj("app-product", "PBXFileReference", explicitFileType="wrapper.application",
+                                includeInIndex=0, path="ProofFixture.app", sourceTree="BUILT_PRODUCTS_DIR")
+              tests_product = obj("tests-product", "PBXFileReference", explicitFileType="wrapper.cfbundle",
+                                  includeInIndex=0, path="ProofUITests.xctest", sourceTree="BUILT_PRODUCTS_DIR")
+              products = obj("products", "PBXGroup", children=[app_product, tests_product],
+                             name="Products", sourceTree="<group>")
+              group = obj("main-group", "PBXGroup", children=[app_file, tests_file, products], sourceTree="<group>")
+              common = {"MACOSX_DEPLOYMENT_TARGET": "15.0", "SDKROOT": "macosx", "SWIFT_VERSION": "6.0",
+                        "CLANG_ENABLE_MODULES": "YES", "CODE_SIGN_IDENTITY": "-", "CODE_SIGN_STYLE": "Manual",
+                        "CODE_SIGNING_ALLOWED": "YES", "ENABLE_HARDENED_RUNTIME": "NO",
+                        "ONLY_ACTIVE_ARCH": "YES", "ENABLE_TESTABILITY": "YES"}
+              global_config = obj("global-debug", "XCBuildConfiguration", name="Debug", buildSettings=common)
+              global_list = obj("global-list", "XCConfigurationList", buildConfigurations=[global_config],
+                                defaultConfigurationIsVisible=0, defaultConfigurationName="Debug")
+              def target_config(label, bundle_id, **extra):
+                  config = obj(label + "-debug", "XCBuildConfiguration", name="Debug", buildSettings={
+                      "PRODUCT_NAME": "$(TARGET_NAME)", "PRODUCT_BUNDLE_IDENTIFIER": bundle_id,
+                      "GENERATE_INFOPLIST_FILE": "YES", **extra,
+                  })
+                  return obj(label + "-config-list", "XCConfigurationList", buildConfigurations=[config],
+                             defaultConfigurationIsVisible=0, defaultConfigurationName="Debug")
+              app_config = target_config("app", app_id)
+              tests_config = target_config("tests", test_id, TEST_TARGET_NAME="ProofFixture",
+                                          LD_RUNPATH_SEARCH_PATHS=["$(inherited)", "@executable_path/../Frameworks", "@loader_path/Frameworks"])
+              def phase(label, isa, files):
+                  return obj(label, isa, buildActionMask=2147483647, files=files, runOnlyForDeploymentPostprocessing=0)
+              app_build = obj("app-build", "PBXBuildFile", fileRef=app_file)
+              tests_build = obj("tests-build", "PBXBuildFile", fileRef=tests_file)
+              app_sources = phase("app-sources", "PBXSourcesBuildPhase", [app_build])
+              tests_sources = phase("tests-sources", "PBXSourcesBuildPhase", [tests_build])
+              app_frameworks = phase("app-frameworks", "PBXFrameworksBuildPhase", [])
+              tests_frameworks = phase("tests-frameworks", "PBXFrameworksBuildPhase", [])
+              app_target = obj("app-target", "PBXNativeTarget", name="ProofFixture", productName="ProofFixture",
+                               productType="com.apple.product-type.application", productReference=app_product,
+                               buildConfigurationList=app_config, buildPhases=[app_sources, app_frameworks],
+                               buildRules=[], dependencies=[])
+              proxy = obj("target-proxy", "PBXContainerItemProxy", containerPortal=oid("project"), proxyType=1,
+                          remoteGlobalIDString=app_target, remoteInfo="ProofFixture")
+              dependency = obj("test-dependency", "PBXTargetDependency", target=app_target, targetProxy=proxy)
+              tests_target = obj("tests-target", "PBXNativeTarget", name="ProofUITests", productName="ProofUITests",
+                                 productType="com.apple.product-type.bundle.ui-testing", productReference=tests_product,
+                                 buildConfigurationList=tests_config, buildPhases=[tests_sources, tests_frameworks],
+                                 buildRules=[], dependencies=[dependency])
+              project = obj("project", "PBXProject", attributes={
+                  "LastUpgradeCheck": "2700", "TargetAttributes": {
+                      app_target: {"CreatedOnToolsVersion": "27.0"},
+                      tests_target: {"CreatedOnToolsVersion": "27.0", "TestTargetID": app_target},
+                  }}, buildConfigurationList=global_list, compatibilityVersion="Xcode 14.0",
+                  developmentRegion="en", hasScannedForEncodings=0, knownRegions=["en", "Base"],
+                  mainGroup=group, productRefGroup=products, projectDirPath="", projectRoot="",
+                  targets=[app_target, tests_target])
+              def encode(value):
+                  if isinstance(value, dict):
+                      return "{\n" + "".join(encode(k) + " = " + encode(v) + ";\n" for k, v in value.items()) + "}"
+                  if isinstance(value, list):
+                      return "(" + "".join(encode(v) + "," for v in value) + ")"
+                  if isinstance(value, int):
+                      return str(value)
+                  return '"' + str(value).replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n") + '"'
+              project_dir = root / "Preflight.xcodeproj"
+              scheme_dir = project_dir / "xcshareddata/xcschemes"
+              scheme_dir.mkdir(parents=True)
+              data = {"archiveVersion": 1, "classes": {}, "objectVersion": 56, "objects": objects, "rootObject": project}
+              (project_dir / "project.pbxproj").write_text("// !$*UTF8*$!\n" + encode(data) + "\n")
+              escape = xml.sax.saxutils.escape
+              def reference(identifier, name, product):
+                  return f'<BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="{identifier}" BuildableName="{product}" BlueprintName="{name}" ReferencedContainer="container:Preflight.xcodeproj"/>'
+              scheme = f'''<?xml version="1.0" encoding="UTF-8"?>
+          <Scheme LastUpgradeVersion="2700" version="1.7">
+            <BuildAction parallelizeBuildables="NO" buildImplicitDependencies="YES"><BuildActionEntries>
+              <BuildActionEntry buildForTesting="YES" buildForRunning="YES" buildForProfiling="NO" buildForArchiving="NO" buildForAnalyzing="NO">{reference(app_target, "ProofFixture", "ProofFixture.app")}</BuildActionEntry>
+              <BuildActionEntry buildForTesting="YES" buildForRunning="NO" buildForProfiling="NO" buildForArchiving="NO" buildForAnalyzing="NO">{reference(tests_target, "ProofUITests", "ProofUITests.xctest")}</BuildActionEntry>
+            </BuildActionEntries></BuildAction>
+            <TestAction buildConfiguration="Debug" shouldUseLaunchSchemeArgsEnv="NO">
+              <Testables><TestableReference skipped="NO">{reference(tests_target, "ProofUITests", "ProofUITests.xctest")}</TestableReference></Testables>
+              <MacroExpansion>{reference(app_target, "ProofFixture", "ProofFixture.app")}</MacroExpansion>
+              <EnvironmentVariables><EnvironmentVariable key="PROOF_OUTPUT" value="{escape(str(observations))}" isEnabled="YES"/></EnvironmentVariables>
+            </TestAction>
+          </Scheme>
+          '''
+              (scheme_dir / "Preflight.xcscheme").write_text(scheme)
+              completed[0] = True
+              print("Prepared unique disposable Xcode UI fixture; no third-party tool installation.")
+          remote_prepare()
+          def real_prepare():
+              from pathlib import Path
+              import json
+              import os
+              import re
+              import subprocess
+
+              assert os.environ['PROOF_RUNNER_ENVIRONMENT'] == 'github-hosted'
+              root = Path(os.environ['RUNNER_TEMP']) / ('pr4911-ui-' + os.environ['GITHUB_RUN_ID'] + '-' + os.environ['GITHUB_RUN_ATTEMPT'])
+              assert not root.is_symlink() and (root / '.owned-by-pr4911').read_text() == os.environ['GITHUB_RUN_ID'] + ':' + os.environ['GITHUB_RUN_ATTEMPT']
+              with open(os.environ['GITHUB_ENV'], 'a') as output: output.write('REAL_APP_EXTERNAL_CLEANUP_BLOCKED=1\n')
+              plan = json.loads((root / 'plan.json').read_text())
+              domains = ['com.steipete.codexbar.debug', 'Y5PE65HELJ.com.steipete.codexbar.debug',
+                         'group.com.steipete.codexbar.debug']
+              before = {}
+              for domain in domains:
+                  result = subprocess.run(['/usr/bin/defaults', 'read', domain], capture_output=True, text=True)
+                  missing = result.returncode == 1 and (
+                      result.stderr.strip() == "Error: Domain '" + domain + "' not found."
+                      or re.search(r'Domain\s+' + re.escape(domain) + r'\s+does not exist\b', result.stdout + result.stderr))
+                  assert missing, 'Preserve existing or unknown application defaults'
+                  before[domain] = False
+              home = Path.home()
+              paths = []
+              for domain in domains:
+                  for area, leaf in [('Preferences', domain + '.plist'), ('Saved Application State', domain + '.savedState'),
+                                     ('Caches', domain), ('HTTPStorages', domain), ('WebKit', domain),
+                                     ('Application Support', domain), ('Containers', domain)]:
+                      paths.append(home / 'Library' / area / leaf)
+                  assert not list((home / 'Library/Preferences/ByHost').glob(domain + '.*.plist'))
+              paths += [home / 'Library/Application Support/CodexBar',
+                        home / 'Library/Group Containers/Y5PE65HELJ.com.steipete.codexbar.debug',
+                        home / 'Library/Group Containers/group.com.steipete.codexbar.debug',
+                        home / 'Library/Application Support/Microsoft Edge',
+                        home / 'Library/Application Support/Google/Chrome', home / '.config/codexbar']
+              assert not any(os.path.lexists(p) for p in paths), 'Preserve existing application/browser files'
+              parents_before = {}
+              for path in paths:
+                  for parent in path.parents:
+                      if parent == home: break
+                      assert parent.is_relative_to(home)
+                      parents_before[str(parent)] = os.path.lexists(parent)
+              plan['real_app'] = {'domains_existed_before': before, 'paths_existed_before': {str(p): False for p in paths},
+                                  'parents_existed_before': parents_before,
+                                  'rules': 'Fresh hosted VM; ordinary settings/config, synthetic metadata only; no credentials, imports, grants or real browser launches.'}
+              (root / 'plan.json').write_text(json.dumps(plan, indent=2))
+              for browser, relative in [('chrome', 'Google/Chrome'), ('edge', 'Microsoft Edge')]:
+                  browser_root = home / 'Library/Application Support' / relative
+                  profile = browser_root / 'Default'
+                  (profile / 'Network').mkdir(parents=True)
+                  (profile / 'Cookies').touch()
+                  (profile / 'Network/Cookies').touch()
+                  (browser_root / 'Local State').write_text(json.dumps({'profile': {'info_cache': {'Default': {'name': 'Proof ' + browser.title()}}}}))
+              defaults = {'settingsSelectedPane': 'provider:langdock', 'providersEnabledOnly': False,
+                          'providerDetectionCompleted': True, 'refreshFrequency': 'manual',
+                          'tokenCostUsageEnabled': False, 'launchAtLogin': False,
+                          'codexbar.legacySecretsMigrationCompleted': True, 'appGroupMigrationVersion': 1,
+                          'debugDisableKeychainAccess': True}
+              for key, value in defaults.items():
+                  flag = '-bool' if isinstance(value, bool) else '-int' if isinstance(value, int) else '-string'
+                  text = 'true' if value is True else 'false' if value is False else str(value)
+                  subprocess.run(['/usr/bin/defaults', 'write', domains[0], key, flag, text], check=True)
+              (root / 'UITests.swift').write_text(r'''
+          import AppKit
+          import CryptoKit
+          import Foundation
+          import XCTest
+          import XCUIAutomation
+
+          final class PreflightTests: XCTestCase {
+              @MainActor
+              func testRealPackagedProfile() throws {
+                  self.executionTimeAllowance = 150
+                  let env = ProcessInfo.processInfo.environment
+                  let bundlePath = try XCTUnwrap(env["PROOF_APP_BUNDLE"])
+                  let configPath = try XCTUnwrap(env["PROOF_CONFIG"])
+                  let variant = try XCTUnwrap(env["PROOF_VARIANT"])
+                  let browser = try XCTUnwrap(env["PROOF_BROWSER"])
+                  let phase = try XCTUnwrap(env["PROOF_PHASE"])
+                  let desired = try XCTUnwrap(env["PROOF_EXPECTED_NAME"])
+                  let id = "com.steipete.codexbar.debug"
+                  let expectedURL = URL(fileURLWithPath: bundlePath).resolvingSymlinksInPath()
+                  guard NSRunningApplication.runningApplications(withBundleIdentifier: id).isEmpty,
+                        NSWorkspace.shared.urlForApplication(withBundleIdentifier: id)?.resolvingSymlinksInPath() == expectedURL else {
+                      XCTFail("The exact own bundle must be registered, with no preexisting instance")
+                      return
+                  }
+                  let app = XCUIApplication(bundleIdentifier: id)
+                  app.launchEnvironment["CODEXBAR_CONFIG"] = configPath
+                  app.launchEnvironment["CODEXBAR_DISABLE_KEYCHAIN_ACCESS"] = "1"
+                  app.launchArguments = ["-AppleLanguages", "(de)", "-AppleLocale", "de_DE"]
+                  defer {
+                      let running = NSRunningApplication.runningApplications(withBundleIdentifier: id)
+                      if running.allSatisfy({ $0.bundleURL?.resolvingSymlinksInPath() == expectedURL }) { app.terminate() }
+                  }
+
+                  func exactAppPID() throws -> pid_t {
+                      let running = NSRunningApplication.runningApplications(withBundleIdentifier: id)
+                      XCTAssertEqual(running.count, 1)
+                      let process = try XCTUnwrap(running.first)
+                      XCTAssertEqual(process.bundleURL?.resolvingSymlinksInPath().path,
+                                     URL(fileURLWithPath: bundlePath).resolvingSymlinksInPath().path)
+                      return process.processIdentifier
+                  }
+                  func openSettings() -> XCUIElement {
+                      app.launch()
+                      app.activate()
+                      app.typeKey(",", modifierFlags: .command)
+                      let window = app.windows["com.steipete.codexbar.settings"]
+                      XCTAssertTrue(window.waitForExistence(timeout: 25), "Real settings window must open")
+                      return window
+                  }
+                  func visible(_ value: String, in window: XCUIElement) -> Bool {
+                      let matches = window.descendants(matching: .any).matching(
+                          NSPredicate(format: "label == %@ OR value == %@", value, value))
+                      for index in 0..<min(matches.count, 30) {
+                          if matches.element(boundBy: index).isHittable { return true }
+                      }
+                      return false
+                  }
+                  let window = openSettings()
+                  guard window.exists else { return }
+                  let firstPID = try exactAppPID()
+                  let german = window.staticTexts["Browserprofil"].waitForExistence(timeout: 15)
+                  XCTAssertTrue(german, "Use the actual German provider pane")
+                  let desiredVisible = visible(desired, in: window)
+                  let fallbackVisible = visible("Standard", in: window)
+                  let expected = variant == "head" ? desiredVisible : !desiredVisible && fallbackVisible
+                  if !german || !expected { print("PR4911_REAL_AX " + String(window.debugDescription.prefix(12000))) }
+                  XCTAssertTrue(expected, "Observe the expected baseline failure or head correction")
+                  let png = window.screenshot().pngRepresentation
+                  XCTAssertTrue(png.count > 4096 && png.count <= 262144)
+                  let picture = XCTAttachment(data: png, uniformTypeIdentifier: "public.png")
+                  picture.name = "PR4911 real " + variant + " " + browser + " " + phase
+                  picture.lifetime = .keepAlways
+                  self.add(picture)
+                  let controls = window.popUpButtons.allElementsBoundByIndex.prefix(20).map { control in
+                      ["label": control.label, "value": String(describing: control.value ?? "")]
+                  }
+                  app.terminate()
+                  XCTAssertTrue(app.wait(for: .notRunning, timeout: 15))
+                  let secondWindow = openSettings()
+                  guard secondWindow.exists else { return }
+                  let secondPID = try exactAppPID()
+                  XCTAssertNotEqual(firstPID, secondPID, "Restart the same packaged app as a new process")
+                  XCTAssertTrue(secondWindow.staticTexts["Browserprofil"].waitForExistence(timeout: 15))
+                  let afterRestartDesired = visible(desired, in: secondWindow)
+                  let afterRestartFallback = visible("Standard", in: secondWindow)
+                  let restartExpected = variant == "head" ? afterRestartDesired : !afterRestartDesired && afterRestartFallback
+                  XCTAssertTrue(restartExpected)
+                  let result: [String: Any] = [
+                      "variant": variant, "browser": browser, "phase": phase,
+                      "desiredName": desired, "desiredVisible": desiredVisible, "fallbackVisible": fallbackVisible,
+                      "germanPane": german, "sameExactBundle": true, "newProcessAfterRestart": firstPID != secondPID,
+                      "desiredVisibleAfterRestart": afterRestartDesired, "fallbackVisibleAfterRestart": afterRestartFallback,
+                      "popupControls": controls, "pngBytes": png.count,
+                      "pngSHA256": SHA256.hash(data: png).map { String(format: "%02x", $0) }.joined(),
+                      "passed": expected && restartExpected && german && firstPID != secondPID && png.count > 4096,
+                  ]
+                  let data = try JSONSerialization.data(withJSONObject: result, options: [.sortedKeys])
+                  let metadata = XCTAttachment(data: data, uniformTypeIdentifier: "public.json")
+                  metadata.name = "PR4911 real result"
+                  metadata.lifetime = .keepAlways
+                  self.add(metadata)
+                  print("PR4911_REAL_UI " + String(decoding: data, as: UTF8.self))
+              }
+          }
+          ''')
+              print('Prepared ordinary app preferences and synthetic Chrome/Edge stores; no accounts or browser processes.')
+
+          real_prepare()
+          PY
+
+      - name: Package exact source revisions and exercise real app settings
+        timeout-minutes: 57
+        env:
+          PROOF_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        run: |
+          python3 - <<'PY'
+          def real_execute():
+              from pathlib import Path
+              import hashlib
+              import json
+              import os
+              import plistlib
+              import re
+              import subprocess
+              import sys
+              import time
+
+              assert os.environ['PROOF_RUNNER_ENVIRONMENT'] == 'github-hosted'
+              root = Path(os.environ['PROOF_ROOT'])
+              env = dict(os.environ, CODEXBAR_SIGNING='adhoc', CODEXBAR_ALLOW_LLDB='0', ARCHES='arm64',
+                         GIT_TERMINAL_PROMPT='0')
+              results = []
+              report = {'scope': 'Real packaged app on a fresh hosted VM with synthetic metadata only; no cookie imports or live account tests.',
+                        'variants': [], 'stages': results, 'completed': False}
+              (root / 'real-report.json').write_text(json.dumps(report, indent=2))
+              import atexit
+              import signal
+              active = [None]
+              def stop_active():
+                  process = active[0]
+                  if process is None or process.poll() is not None:
+                      return
+                  # This live Popen owns the session created immediately below.
+                  os.killpg(process.pid, signal.SIGTERM)
+                  try: process.wait(timeout=15)
+                  except subprocess.TimeoutExpired:
+                      if process.poll() is None: os.killpg(process.pid, signal.SIGKILL)
+                      process.wait(timeout=10)
+              atexit.register(stop_active)
+              def interrupted(signum, frame):
+                  stop_active()
+                  raise SystemExit(128 + signum)
+              signal.signal(signal.SIGTERM, interrupted)
+              signal.signal(signal.SIGINT, interrupted)
+              def run_logged(command, log, cwd=None, timeout=1800):
+                  with open(log, 'w') as output:
+                      process = subprocess.Popen(command, cwd=cwd, env=env, stdout=output, stderr=subprocess.STDOUT,
+                                                 start_new_session=True)
+                      active[0] = process
+                      try:
+                          return process.wait(timeout=timeout)
+                      finally:
+                          stop_active()
+                          active[0] = None
+              def checked(command, cwd=None):
+                  return subprocess.check_output(command, cwd=cwd, env=env, text=True).strip()
+              def save():
+                  (root / 'real-report.json').write_text(json.dumps(report, indent=2))
+              def patch_run(value, updates):
+                  if isinstance(value, dict):
+                      if 'TestBundlePath' in value:
+                          value.setdefault('EnvironmentVariables', {}).update(updates)
+                      for child in value.values(): patch_run(child, updates)
+                  elif isinstance(value, list):
+                      for child in value: patch_run(child, updates)
+              build_exit = run_logged(['/usr/bin/xcodebuild', 'build-for-testing', '-project', str(root / 'Preflight.xcodeproj'),
+                                      '-scheme', 'Preflight', '-destination', 'platform=macOS', '-derivedDataPath', str(root / 'DerivedData'),
+                                      '-parallel-testing-enabled', 'NO', 'CODE_SIGN_IDENTITY=-', 'CODE_SIGN_STYLE=Manual', 'DEVELOPMENT_TEAM='],
+                                     root / 'driver-build.log', timeout=420)
+              assert build_exit == 0, 'Xcode UI driver build failed; see driver log'
+              runs = list((root / 'DerivedData/Build/Products').glob('*.xctestrun'))
+              assert len(runs) == 1
+              original_run = plistlib.loads(runs[0].read_bytes())
+              lsregister = '/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister'
+              for variant, revision in [('head', 'ac8e6a93d083f46b52984052317f425309d20894'),
+                                        ('base', '897bff31731bb4b21b105f6e8bf4c32a8a8bf095')]:
+                  source = root / ('source-' + variant)
+                  source.mkdir()
+                  for command in [['git', 'init', '-q'], ['git', 'remote', 'add', 'origin', 'https://github.com/dYn36/CodexBar.git'],
+                                  ['git', '-c', 'credential.helper=', 'fetch', '--depth=1', 'origin', revision],
+                                  ['git', 'checkout', '--detach', '-q', 'FETCH_HEAD']]:
+                      assert run_logged(command, root / ('git-' + variant + '.log'), cwd=source, timeout=180) == 0
+                  assert checked(['git', 'rev-parse', 'HEAD'], cwd=source) == revision
+                  assert not checked(['git', 'status', '--porcelain', '--untracked-files=no'], cwd=source)
+                  print('PR4911_PACKAGE_START ' + variant + ' ' + revision, flush=True)
+                  package_exit = run_logged(['bash', './Scripts/package_app.sh', 'debug'], root / ('package-' + variant + '.log'), cwd=source)
+                  if package_exit != 0:
+                      print('\n'.join((root / ('package-' + variant + '.log')).read_text().splitlines()[-70:]))
+                      raise RuntimeError('Normal app packaging failed: ' + variant)
+                  bundle = source / 'CodexBar.app'
+                  info = plistlib.loads((bundle / 'Contents/Info.plist').read_bytes())
+                  assert info['CFBundleIdentifier'] == 'com.steipete.codexbar.debug'
+                  assert str(info.get('CodexGitCommit', '')).startswith(revision[:7])
+                  subprocess.run(['codesign', '--verify', '--deep', '--strict', str(bundle)], check=True)
+                  sign = subprocess.run(['codesign', '-dv', '--verbose=4', str(bundle)], capture_output=True, text=True, check=True)
+                  entitlement = subprocess.run(['codesign', '-d', '--entitlements', ':-', str(bundle)], capture_output=True, check=True)
+                  entitlements = plistlib.loads(entitlement.stdout)
+                  assert not entitlements.get('com.apple.security.get-task-allow', False)
+                  assert not checked(['git', 'status', '--porcelain', '--untracked-files=no'], cwd=source)
+                  binary = bundle / 'Contents/MacOS' / info['CFBundleExecutable']
+                  report['variants'].append({'variant': variant, 'sourceCommit': revision,
+                                             'binarySHA256': hashlib.sha256(binary.read_bytes()).hexdigest(),
+                                             'codeDirectoryHash': re.search(r'^CDHash=(.+)$', sign.stderr, re.MULTILINE).group(1),
+                                             'getTaskAllow': False, 'packageSourceClean': True})
+                  save()
+                  subprocess.run([lsregister, '-f', str(bundle)], check=True)
+                  providers_source = (source / 'Sources/CodexBarCore/Providers/Providers.swift').read_text()
+                  enum_body = providers_source.split('public enum UsageProvider:', 1)[1].split('\n}', 1)[0]
+                  providers = re.findall(r'^    case ([a-zA-Z0-9_]+)\s*$', enum_body, re.MULTILINE)
+                  assert len(providers) > 50 and 'langdock' in providers
+                  for browser, relative in [('edge', 'Microsoft Edge'), ('chrome', 'Google/Chrome')]:
+                      browser_root = Path.home() / 'Library/Application Support' / relative
+                      profile = str(browser_root / 'Default')
+                      config = root / (variant + '-' + browser + '-config.json')
+                      entries = [{'id': provider, 'enabled': False} for provider in providers]
+                      langdock = next(p for p in entries if p['id'] == 'langdock')
+                      langdock.update({'source': 'web', 'cookieSource': 'auto', 'browserID': browser, 'browserProfileID': profile})
+                      config.write_text(json.dumps({'version': 1, 'providers': entries, 'shareUsageWithCLI': False}))
+                      phases = [('initial', 'Proof ' + browser.title())]
+                      if variant == 'head': phases.append(('renamed-default', 'Default'))
+                      for phase, expected_name in phases:
+                          (browser_root / 'Local State').write_text(json.dumps({'profile': {'info_cache': {'Default': {'name': expected_name}}}}))
+                          before_config = json.loads(config.read_text())
+                          selected = next(p for p in before_config['providers'] if p['id'] == 'langdock')
+                          assert selected['browserID'] == browser and selected['browserProfileID'] == profile
+                          assert all(not p.get('enabled', False) for p in before_config['providers'])
+                          parameters = {'PROOF_APP_BUNDLE': str(bundle), 'PROOF_CONFIG': str(config), 'PROOF_VARIANT': variant,
+                                        'PROOF_BROWSER': browser, 'PROOF_PHASE': phase, 'PROOF_EXPECTED_NAME': expected_name}
+                          settings = plistlib.loads(plistlib.dumps(original_run))
+                          patch_run(settings, parameters)
+                          stage_id = variant + '-' + browser + '-' + phase
+                          test_run = runs[0].parent / (stage_id + '.xctestrun')
+                          test_run.write_bytes(plistlib.dumps(settings))
+                          result_path = root / (stage_id + '.xcresult')
+                          log = root / (stage_id + '.log')
+                          code = run_logged(['/usr/bin/xcodebuild', 'test-without-building', '-xctestrun', str(test_run),
+                                             '-destination', 'platform=macOS', '-resultBundlePath', str(result_path),
+                                             '-parallel-testing-enabled', 'NO'], log, timeout=360)
+                          output = log.read_text()
+                          print('\n'.join(output.splitlines()[-45:]), flush=True)
+                          after_config = json.loads(config.read_text())
+                          selected_after = next(p for p in after_config['providers'] if p['id'] == 'langdock')
+                          identity_stable = selected_after.get('browserID') == browser and selected_after.get('browserProfileID') == profile
+                          providers_disabled = all(not p.get('enabled', False) for p in after_config['providers'])
+                          record = {'stage': stage_id, 'variant': variant, 'browser': browser, 'phase': phase,
+                                    'xcodebuild_exit': code, 'selectedRawIDUnchanged': identity_stable, 'allProvidersDisabled': providers_disabled}
+                          results.append(record)
+                          save()
+                          assert code == 0 and identity_stable and providers_disabled, 'Actual app UI phase failed: ' + stage_id
+                  subprocess.run([lsregister, '-u', str(bundle)], check=True)
+              report['completed'] = True
+              save()
+              print('PR4911_REAL_EXECUTION_COMPLETE ' + json.dumps(report, sort_keys=True), flush=True)
+
+          real_execute()
+          PY
+
+      - name: Export bound native evidence and restore own external state
+        if: always()
+        env:
+          PROOF_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        run: |
+          python3 - <<'PY'
+          def real_cleanup():
+              from pathlib import Path
+              import base64
+              import hashlib
+              import json
+              import os
+              import re
+              import shutil
+              import subprocess
+              import time
+
+              assert os.environ['PROOF_RUNNER_ENVIRONMENT'] == 'github-hosted'
+              run = os.environ['GITHUB_RUN_ID']
+              attempt = os.environ['GITHUB_RUN_ATTEMPT']
+              root = Path(os.environ.get('PROOF_ROOT', str(Path(os.environ['RUNNER_TEMP']) / ('pr4911-ui-' + run + '-' + attempt))))
+              assert root == Path(os.environ['RUNNER_TEMP']) / ('pr4911-ui-' + run + '-' + attempt)
+              if not root.exists():
+                  print('No own remote proof root remains; no actual app success claimed.')
+                  return
+              assert not root.is_symlink() and (root / '.owned-by-pr4911').read_text() == run + ':' + attempt
+              summary = {'actualAppProofPassed': False, 'diagnostic_errors': [], 'cleanup_errors': [], 'stages': []}
+              try: report = json.loads((root / 'real-report.json').read_text())
+              except Exception: report = {'completed': False, 'stages': [], 'variants': []}
+              summary['source_and_binary_provenance'] = report.get('variants', [])
+              cumulative_png_bytes = 0
+              for stage in report.get('stages', []):
+                  item = dict(stage)
+                  try:
+                      stage_id = stage['stage']
+                      assert re.fullmatch(r'(head|base)-(edge|chrome)-(initial|renamed-default)', stage_id)
+                      exported = root / ('export-' + stage_id)
+                      subprocess.run(['/usr/bin/xcrun', 'xcresulttool', 'export', 'attachments', '--path', str(root / (stage_id + '.xcresult')),
+                                      '--output-path', str(exported)], capture_output=True, text=True, check=True, timeout=45)
+                      metadata = []
+                      for path in exported.rglob('*.json'):
+                          try:
+                              value = json.loads(path.read_text())
+                              if isinstance(value, dict) and {'pngSHA256', 'desiredVisible', 'germanPane', 'variant', 'browser', 'phase', 'passed'} <= value.keys():
+                                  metadata.append(value)
+                          except (ValueError, UnicodeError): pass
+                      pngs = list(exported.rglob('*.png'))
+                      assert len(metadata) == 1 and len(pngs) == 1
+                      value = metadata[0]
+                      assert value['variant'] == stage['variant'] and value['browser'] == stage['browser'] and value['phase'] == stage['phase']
+                      image = pngs[0]
+                      assert not image.is_symlink() and image.is_file() and 4096 < image.stat().st_size <= 262144
+                      data = image.read_bytes()
+                      digest = hashlib.sha256(data).hexdigest()
+                      allowed = stage['xcodebuild_exit'] == 0 and stage['selectedRawIDUnchanged'] and stage['allProvidersDisabled'] and value['passed'] is True and value['germanPane'] is True and value['sameExactBundle'] is True and value['newProcessAfterRestart'] is True and digest == value['pngSHA256'] and len(data) == value['pngBytes']
+                      item['ui'] = value
+                      item['nativeAttachmentBound'] = allowed
+                      cumulative_png_bytes += len(data)
+                      assert cumulative_png_bytes <= 1048576
+                      if allowed:
+                          encoded = base64.b64encode(data).decode('ascii')
+                          chunks = [encoded[i:i+4096] for i in range(0, len(encoded), 4096)]
+                          print('PR4911_REAL_PNG_META ' + json.dumps({'stage': stage_id, 'sha256': digest, 'bytes': len(data), 'chunks': len(chunks)}, sort_keys=True))
+                          for index, chunk in enumerate(chunks):
+                              print('PR4911_REAL_PNG_CHUNK ' + stage_id + ' ' + digest + ' ' + str(index) + '/' + str(len(chunks)) + ' ' + chunk)
+                  except Exception as error:
+                      item['nativeAttachmentBound'] = False
+                      summary['diagnostic_errors'].append(stage.get('stage', '?') + ': ' + type(error).__name__)
+                  summary['stages'].append(item)
+              teardown = r'''
+          import AppKit
+          import Foundation
+          let root = URL(fileURLWithPath: CommandLine.arguments[1]).resolvingSymlinksInPath().path + "/"
+          let id = "com.steipete.codexbar.debug"
+          let apps = NSRunningApplication.runningApplications(withBundleIdentifier: id)
+          guard apps.allSatisfy({ $0.bundleURL?.resolvingSymlinksInPath().path.hasPrefix(root) == true }) else { exit(2) }
+          for app in apps { _ = app.terminate() }
+          let deadline = Date().addingTimeInterval(5)
+          while apps.contains(where: { !$0.isTerminated }) && Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.1)) }
+          for app in apps where !app.isTerminated { _ = app.forceTerminate() }
+          let forceDeadline = Date().addingTimeInterval(3)
+          while apps.contains(where: { !$0.isTerminated }) && Date() < forceDeadline { RunLoop.current.run(until: Date().addingTimeInterval(0.1)) }
+          exit(NSRunningApplication.runningApplications(withBundleIdentifier: id).isEmpty ? 0 : 1)
+          '''
+              try:
+                  subprocess.run(['/usr/bin/xcrun', 'swift', '-module-cache-path', str(root / 'real-cleanup-cache'), '-', str(root)],
+                                 input=teardown, capture_output=True, text=True, check=True, timeout=45)
+                  for variant in ['head', 'base']:
+                      bundle = root / ('source-' + variant) / 'CodexBar.app'
+                      if bundle.exists():
+                          subprocess.run(['/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister',
+                                          '-u', str(bundle)], capture_output=True, check=True)
+              except Exception as error: summary['cleanup_errors'].append('Own app termination/unregister: ' + type(error).__name__)
+              def own_producers():
+                  found = []
+                  for row in subprocess.check_output(['ps', '-axo', 'pid=,command='], text=True).splitlines():
+                      fields = row.strip().split(None, 1)
+                      if len(fields) == 2 and int(fields[0]) != os.getpid() and str(root) + '/' in fields[1]:
+                          found.append(int(fields[0]))
+                  return found
+              try:
+                  deadline = time.monotonic() + 10
+                  while own_producers() and time.monotonic() < deadline: time.sleep(.2)
+                  summary['own_producers_absent_before_external_cleanup'] = not own_producers()
+                  assert not summary['cleanup_errors'] and summary['own_producers_absent_before_external_cleanup'], 'Own process shutdown not verified; preserve external state and root'
+                  plan = json.loads((root / 'plan.json').read_text()).get('real_app')
+                  if plan:
+                      expected_domains = {'com.steipete.codexbar.debug', 'Y5PE65HELJ.com.steipete.codexbar.debug', 'group.com.steipete.codexbar.debug'}
+                      assert set(plan['domains_existed_before']) == expected_domains and not any(plan['domains_existed_before'].values())
+                      assert not any(plan['paths_existed_before'].values())
+                      allowed_paths = {str(Path.home() / 'Library' / area / leaf)
+                                       for domain in expected_domains
+                                       for area, leaf in [('Preferences', domain + '.plist'), ('Saved Application State', domain + '.savedState'),
+                                                          ('Caches', domain), ('HTTPStorages', domain), ('WebKit', domain),
+                                                          ('Application Support', domain), ('Containers', domain)]}
+                      allowed_paths.update(str(Path.home() / 'Library' / relative) for relative in [
+                          'Application Support/CodexBar', 'Group Containers/Y5PE65HELJ.com.steipete.codexbar.debug',
+                          'Group Containers/group.com.steipete.codexbar.debug', 'Application Support/Microsoft Edge',
+                          'Application Support/Google/Chrome'])
+                      allowed_paths.add(str(Path.home() / '.config/codexbar'))
+                      assert set(plan['paths_existed_before']) == allowed_paths
+                      for domain in expected_domains:
+                          subprocess.run(['/usr/bin/defaults', 'delete', domain], capture_output=True)
+                          for path in (Path.home() / 'Library/Preferences/ByHost').glob(domain + '.*.plist'): path.unlink()
+                      for raw_path in plan['paths_existed_before']:
+                          path = Path(raw_path)
+                          assert str(path) in allowed_paths
+                          if os.path.lexists(path):
+                              assert not path.is_symlink()
+                              if path.is_dir(): shutil.rmtree(path)
+                              else: path.unlink()
+                      expected_parents = set()
+                      for raw_path in allowed_paths:
+                          for parent in Path(raw_path).parents:
+                              if parent == Path.home(): break
+                              assert parent.is_relative_to(Path.home())
+                              expected_parents.add(str(parent))
+                      assert set(plan['parents_existed_before']) == expected_parents
+                      retained_parents = []
+                      for raw_path, existed in sorted(plan['parents_existed_before'].items(), key=lambda item: len(Path(item[0]).parts), reverse=True):
+                          parent = Path(raw_path)
+                          if not existed and os.path.lexists(parent):
+                              assert not parent.is_symlink() and parent.is_dir()
+                              if not any(parent.iterdir()): parent.rmdir()
+                              else: retained_parents.append(raw_path)
+                      summary['new_nonempty_parents_preserved'] = retained_parents
+                      states = {}
+                      for domain in expected_domains:
+                          result = subprocess.run(['/usr/bin/defaults', 'read', domain], capture_output=True, text=True)
+                          states[domain] = bool(result.returncode == 1 and (result.stderr.strip() == "Error: Domain '" + domain + "' not found." or re.search(r'Domain\s+' + re.escape(domain) + r'\s+does not exist\b', result.stdout + result.stderr)))
+                      summary['real_app_domains_absent'] = states
+                      summary['real_app_paths_absent'] = all(not os.path.lexists(p) for p in plan['paths_existed_before'])
+                      summary['real_app_byhost_absent'] = all(not list((Path.home() / 'Library/Preferences/ByHost').glob(d + '.*.plist')) for d in expected_domains)
+                      summary['real_app_external_cleanup_verified'] = all(states.values()) and summary['real_app_paths_absent'] and summary['real_app_byhost_absent']
+                  else:
+                      summary['real_app_external_cleanup_verified'] = True
+                      summary['diagnostic_errors'].append('Actual app preparation did not commit a mutation plan; no external cleanup attempted')
+              except Exception as error: summary['cleanup_errors'].append('Own external state cleanup: ' + type(error).__name__)
+              summary['actualAppProofPassed'] = report.get('completed', False) and len(summary['stages']) == 6 and all(s.get('nativeAttachmentBound', False) for s in summary['stages']) and not summary['diagnostic_errors']
+              summary['visual_review'] = 'pending assistant inspection of unchanged native images'
+              print('PR4911_REAL_APP_SUMMARY ' + json.dumps(summary, sort_keys=True))
+              with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as output:
+                  output.write('## Real packaged-app proof\n\n~~~json\n' + json.dumps(summary, indent=2) + '\n~~~\n')
+              if summary['cleanup_errors'] or not summary.get('real_app_external_cleanup_verified', False):
+                  with open(os.environ['GITHUB_ENV'], 'a') as output: output.write('REAL_APP_EXTERNAL_CLEANUP_BLOCKED=1\n')
+                  raise RuntimeError('Actual app cleanup failed; preserve owned root for diagnostics until VM disposal')
+              with open(os.environ['GITHUB_ENV'], 'a') as output: output.write('REAL_APP_EXTERNAL_CLEANUP_BLOCKED=0\n')
+              if not summary['actualAppProofPassed']:
+                  with open(os.environ['GITHUB_ENV'], 'a') as output: output.write('REAL_APP_PROOF_FAILED=1\n')
+
+          real_cleanup()
+          PY
+
+      - name: Remove own test runner, builds and diagnostics
+        if: always()
+        env:
+          PROOF_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        run: |
+          test "${REAL_APP_EXTERNAL_CLEANUP_BLOCKED:-1}" != 1
+          python3 - <<'PY'
+          def remote_cleanup():
+              from pathlib import Path
+              import json
+              import os
+              import plistlib
+              import shutil
+              import subprocess
+              import re
+              import time
+              import hashlib
+              import base64
+              run = os.environ["GITHUB_RUN_ID"]
+              attempt = os.environ["GITHUB_RUN_ATTEMPT"]
+              assert run.isdigit() and attempt.isdigit()
+              assert os.environ["PROOF_RUNNER_ENVIRONMENT"] == "github-hosted"
+              expected_root = Path(os.environ["RUNNER_TEMP"]) / ("pr4911-ui-" + run + "-" + attempt)
+              root = Path(os.environ.get("PROOF_ROOT", str(expected_root)))
+              assert root == expected_root and not root.is_symlink()
+              if not root.exists():
+                  print("No owned proof root remains; no app-test success is asserted.")
+                  return
+              assert (root / ".owned-by-pr4911").read_text() == run + ":" + attempt
+              summary = {"xcodebuild_exit": None, "observations": None, "diagnostic_errors": [], "cleanup_errors": []}
+              def read_observation(path, decoder):
+                  try:
+                      return decoder(path.read_text()) if path.exists() else None
+                  except Exception as error:
+                      summary["diagnostic_errors"].append(type(error).__name__ + ": " + path.name)
+                      return None
+              summary["xcodebuild_exit"] = read_observation(root / "xcodebuild-exit.txt", lambda v: int(v.strip()))
+              summary["observations"] = read_observation(root / "observations/result.json", json.loads)
+              if summary["observations"] is None:
+                  try:
+                      for line in (root / "xcodebuild.log").read_text().splitlines():
+                          marker = "PR4911_UI_PREFLIGHT_OBSERVATIONS "
+                          if marker in line:
+                              try:
+                                  value = json.loads(line.split(marker, 1)[1])
+                                  assert set(value) == {"mainWindow", "settingsShortcut", "screenshotCaptured", "pngBytes", "pngSHA256", "passed"}
+                                  summary["observations"] = value
+                              except (ValueError, AssertionError):
+                                  continue
+                  except Exception as error:
+                      summary["diagnostic_errors"].append("Test-log observations: " + type(error).__name__)
+              summary["app_test_marker_presence"] = read_observation(root / "observations/app-test-markers.json", json.loads)
+              exported_metadata = []
+              exported_images = []
+              if (root / "Result.xcresult").exists():
+                  try:
+                      exported = root / "exported-attachments"
+                      subprocess.run(
+                          ["/usr/bin/xcrun", "xcresulttool", "export", "attachments",
+                           "--path", str(root / "Result.xcresult"), "--output-path", str(exported)],
+                          check=True, capture_output=True, text=True, timeout=45)
+                      for path in exported.rglob("*.json"):
+                          try:
+                              value = json.loads(path.read_text())
+                              if isinstance(value, dict) and set(value) == {"mainWindow", "settingsShortcut", "screenshotCaptured", "pngBytes", "pngSHA256", "passed"}:
+                                  exported_metadata.append(value)
+                          except (ValueError, UnicodeError):
+                              continue
+                      png_paths = list(exported.rglob("*.png"))
+                      assert len(png_paths) == 1, "Expected exactly one own screenshot attachment"
+                      for path in png_paths:
+                          assert path.is_file() and not path.is_symlink()
+                          assert 4096 < path.stat().st_size <= 262144, "Bound screenshot capsule to 256 KiB"
+                          data = path.read_bytes()
+                          if data.startswith(b"\x89PNG\r\n\x1a\n") and len(data) > 4096:
+                              digest = hashlib.sha256(data).hexdigest()
+                              metadata = exported_metadata[0] if len(exported_metadata) == 1 else {}
+                              capsule_allowed = bool(summary["xcodebuild_exit"] == 0
+                                  and metadata.get("passed") is True and metadata.get("mainWindow") is True
+                                  and metadata.get("settingsShortcut") is True and metadata.get("screenshotCaptured") is True
+                                  and metadata.get("pngSHA256") == digest and metadata.get("pngBytes") == len(data))
+                              exported_images.append({"bytes": len(data), "sha256": digest, "capsule_released": capsule_allowed})
+                              if not capsule_allowed:
+                                  continue
+                              encoded = base64.b64encode(data).decode("ascii")
+                              chunks = [encoded[i:i + 4096] for i in range(0, len(encoded), 4096)]
+                              print("PR4911_PNG_META " + json.dumps({"sha256": digest, "bytes": len(data), "chunks": len(chunks)}, sort_keys=True))
+                              for index, chunk in enumerate(chunks):
+                                  print("PR4911_PNG_CHUNK " + digest + " " + str(index) + "/" + str(len(chunks)) + " " + chunk)
+                  except Exception as error:
+                      summary["diagnostic_errors"].append("Native attachment export: " + type(error).__name__)
+              summary["exported_images"] = exported_images
+              if summary["observations"] is None and len(exported_metadata) == 1:
+                  summary["observations"] = exported_metadata[0]
+                  summary["observation_source"] = "native XCTest attachment"
+              else:
+                  summary["observation_source"] = "structured XCTest stdout"
+              summary["attachment_metadata_confirmed"] = bool(
+                  summary["observations"] and summary["observations"] in exported_metadata)
+              plan = read_observation(root / "plan.json", json.loads)
+              suffix = "r" + run + "a" + attempt
+              domains = ["org.codexbar.proof4911.fixture." + suffix, "org.codexbar.proof4911.uitests." + suffix,
+                         "org.codexbar.proof4911.uitests." + suffix + ".xctrunner"]
+              # Use NSRunningApplication instances rather than signals addressed only by a PID.
+              teardown = r'''
+          import AppKit
+          import Foundation
+          let root = URL(fileURLWithPath: CommandLine.arguments[1]).resolvingSymlinksInPath().path + "/"
+          let identifiers = Set(CommandLine.arguments.dropFirst(2))
+          func ownedApplications() -> [NSRunningApplication] {
+              NSWorkspace.shared.runningApplications.filter { app in
+                  guard let id = app.bundleIdentifier, identifiers.contains(id), let url = app.bundleURL else { return false }
+                  return url.resolvingSymlinksInPath().path.hasPrefix(root)
+              }
+          }
+          let applications = ownedApplications()
+          for app in applications { _ = app.terminate() }
+          let deadline = Date().addingTimeInterval(5)
+          while applications.contains(where: { !$0.isTerminated }) && Date() < deadline {
+              RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+          }
+          for app in applications where !app.isTerminated { _ = app.forceTerminate() }
+          let forceDeadline = Date().addingTimeInterval(3)
+          while applications.contains(where: { !$0.isTerminated }) && Date() < forceDeadline {
+              RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+          }
+          let remaining = ownedApplications().count
+          print("PR4911_OWN_APPLICATIONS_REMAINING \(remaining)")
+          exit(remaining == 0 ? 0 : 1)
+          '''
+              try:
+                  result = subprocess.run(
+                      ["/usr/bin/xcrun", "swift", "-module-cache-path", str(root / "cleanup-module-cache"),
+                       "-", str(root / "DerivedData/Build/Products"), *domains],
+                      input=teardown, text=True, capture_output=True, timeout=45)
+                  print(result.stdout)
+                  if result.returncode != 0:
+                      summary["cleanup_errors"].append("Instance-bound app termination failed")
+              except Exception as error:
+                  summary["cleanup_errors"].append("App termination: " + type(error).__name__)
+              def own_pids():
+                  result = []
+                  for row in subprocess.check_output(["ps", "-axo", "pid=,command="], text=True).splitlines():
+                      fields = row.strip().split(None, 1)
+                      if len(fields) == 2 and int(fields[0]) != os.getpid() and str(root) + "/" in fields[1]:
+                          result.append(int(fields[0]))
+                  return result
+              expected_paths = {
+                  str(Path.home() / "Library" / area / leaf)
+                  for domain in domains for area, leaf in [
+                      ("Preferences", domain + ".plist"), ("Saved Application State", domain + ".savedState"),
+                      ("Caches", domain), ("HTTPStorages", domain), ("WebKit", domain),
+                      ("Application Support", domain), ("Containers", domain),
+                  ]}
+              try:
+                  deadline = time.monotonic() + 5
+                  while own_pids() and time.monotonic() < deadline:
+                      time.sleep(.2)
+                  assert not own_pids(), "Own processes remain; do not delete their diagnostic root"
+                  if plan is None:
+                      raise RuntimeError("No valid before-state; preserve unverified external cleanup")
+                  assert set(plan["domains_existed_before"]) == set(domains)
+                  assert not any(plan["domains_existed_before"].values())
+                  assert set(plan["paths_existed_before"]) == expected_paths
+                  assert not any(plan["paths_existed_before"].values())
+                  lsregister = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+                  for bundle in (root / "DerivedData/Build/Products/Debug").glob("*.app"):
+                      try: subprocess.run([lsregister, "-u", str(bundle)], check=True, capture_output=True)
+                      except Exception: summary["cleanup_errors"].append("Own bundle unregister failed")
+                  for domain in domains:
+                      try:
+                          subprocess.run(["/usr/bin/defaults", "delete", domain], capture_output=True)
+                          for path in (Path.home() / "Library/Preferences/ByHost").glob(domain + ".*.plist"):
+                              path.unlink()
+                      except Exception: summary["cleanup_errors"].append("Own preference cleanup failed: " + domain)
+                  for raw_path in expected_paths:
+                      try:
+                          path = Path(raw_path)
+                          if os.path.lexists(path):
+                              assert not path.is_symlink()
+                              if path.is_dir(): shutil.rmtree(path)
+                              else: path.unlink()
+                          assert not os.path.lexists(path)
+                      except Exception: summary["cleanup_errors"].append("Own test-path cleanup failed")
+                  shutil.rmtree(root)
+              except Exception as error:
+                  summary["cleanup_errors"].append(type(error).__name__ + ": " + str(error))
+              summary["cleanup_root_absent"] = not root.exists()
+              summary["own_processes_absent"] = not own_pids()
+              summary["originally_absent_test_paths_restored"] = all(
+                  not os.path.lexists(path) for path in expected_paths)
+              domain_states = {}
+              byhost_states = {}
+              for domain in domains:
+                  result = subprocess.run(["/usr/bin/defaults", "read", domain], capture_output=True, text=True)
+                  known_missing = result.returncode == 1 and (result.stderr.strip() == "Error: Domain '" + domain + "' not found." or bool(re.search(
+                      r"Domain\s+" + re.escape(domain) + r"\s+does not exist\b",
+                      result.stdout + result.stderr, re.IGNORECASE)))
+                  domain_states[domain] = "absent" if known_missing else "present" if result.returncode == 0 else "unknown"
+                  byhost_states[domain] = not list((Path.home() / "Library/Preferences/ByHost").glob(domain + ".*.plist"))
+              summary["logical_preference_domains"] = domain_states
+              summary["byhost_paths_absent"] = byhost_states
+              summary["capture_preflight_passed"] = summary["xcodebuild_exit"] == 0 and bool(
+                  summary["observations"] and summary["observations"].get("passed")) and bool(
+                  exported_images) and all(v["capsule_released"] for v in exported_images) and summary["attachment_metadata_confirmed"]
+              summary["readability_verification"] = "pending external visual review of the unchanged native PNG"
+              summary["cleanup_verified"] = summary["cleanup_root_absent"] and summary["own_processes_absent"] and summary["originally_absent_test_paths_restored"] and all(v == "absent" for v in domain_states.values()) and all(byhost_states.values()) and not summary["cleanup_errors"]
+              print("PR4911_PREFLIGHT_SUMMARY " + json.dumps(summary, sort_keys=True))
+              with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as output:
+                  output.write("## Isolated UI preflight\n\n~~~json\n" + json.dumps(summary, indent=2) + "\n~~~\n")
+              if not summary["cleanup_verified"]:
+                  raise RuntimeError("Cleanup verification failed; see explicit summary")
+              if summary["xcodebuild_exit"] == 0 and not summary["capture_preflight_passed"]:
+                  raise RuntimeError("UI observations are not fully proven; no successful preflight is claimed")
+          remote_cleanup()
+          PY
+
+      - name: Enforce the actual-app gate
+        if: always()
+        run: test "${REAL_APP_PROOF_FAILED:-0}" != 1
